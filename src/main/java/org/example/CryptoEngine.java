@@ -8,10 +8,10 @@ import java.security.InvalidKeyException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 
-public class Crypto {
+public class CryptoEngine {
     private static final String ALGORITHM="AES";
     private static final String CIPHER_TRANSFORMATION="AES/GCM/NoPadding";
-    private static final int GCM_TAG_LENGTH = 128; // The length of the authentication tag (in bits)
+    private static final int GCM_TAG_LENGTH = 128;
     private static final int IV_LENGTH = 12;
 
     public static SecretKey generateAESKey() throws Exception{
@@ -41,7 +41,7 @@ public class Crypto {
 
         ByteBuffer byteBuffer = ByteBuffer.wrap(encryptedDataWithIv);
         byte[] iv = new byte[IV_LENGTH];
-        byteBuffer.get(iv); // Reads the first 12 bytes
+        byteBuffer.get(iv);
 
         byte[] encryptedData = new byte[byteBuffer.remaining()];
         byteBuffer.get(encryptedData);
@@ -60,11 +60,11 @@ public class Crypto {
             byte[] rawBytes = secretMessage.getBytes();
             System.out.println("Original: " + new String(rawBytes));
 
-            // Encrypt
+
             byte[] encryptedPackage = encryptChunk(rawBytes, myKey);
             System.out.println("Encrypted Package Size: " + encryptedPackage.length + " bytes");
 
-            // Decrypt
+
             byte[] decryptedBytes = decryptChunk(encryptedPackage, myKey);
             System.out.println("Decrypted: " + new String(decryptedBytes));
 

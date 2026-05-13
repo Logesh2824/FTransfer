@@ -9,7 +9,7 @@ import java.nio.channels.FileChannel;
 public class FileChunker {
     private static final int CHUNK_SIZE = 1024 * 1024;
     public static void main(String[] args) {
-        // We will read from a test file and write to a copy
+
         String sourceFile = "D:\\maven\\FTransfer\\src\\main\\java\\org\\example\\test.mp4";
         String destinationFile = "testop.mp4";
 

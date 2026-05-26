@@ -65,4 +65,31 @@ public class FTController {
             return ResponseEntity.internalServerError().body("Error processing files on the server.");
         }
     }
+
+    @PostMapping("/receive/start")
+    public ResponseEntity<String> startReceiver() {
+        try {
+            // Define exactly where files should be saved automatically.
+            // This grabs your OS user's home folder (e.g., C:\Users\YourName\Downloads\AegisNode)
+            String saveDir = System.getProperty("user.home") + File.separator + "Downloads" + File.separator + "AegisNode";
+
+            System.out.println("API Request: Activating Receiver on port 8080...");
+
+            // Spin up the background thread so the HTTP request completes immediately
+            // without waiting for the actual file transfer to finish.
+            new Thread(() -> {
+                try {
+                    FTReceiver.startListening(saveDir);
+                } catch (Exception e) {
+                    System.err.println("Receiver engine crashed: " + e.getMessage());
+                }
+            }).start();
+
+            return ResponseEntity.ok("Receiver activated successfully. Files will be saved to: " + saveDir);
+
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.internalServerError().body("Error initializing the receiver.");
+        }
+    }
 }

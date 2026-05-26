@@ -1,6 +1,6 @@
 package org.example;
 
-import javax.crypto.SecretKey;
+import javax.crypto.spec.SecretKeySpec;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.File;
@@ -10,6 +10,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.security.PublicKey;
+import java.security.KeyPair;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -36,30 +37,39 @@ public class FTSender {
              DataOutputStream networkOut = new DataOutputStream(socket.getOutputStream());
              DataInputStream networkIn = new DataInputStream(socket.getInputStream())) {
 
-            System.out.println("Connected! Initiating Secure RSA Handshake...");
+            System.out.println("Connected! Initiating ECDHE Secure Handshake...");
 
 
-            int pubKeyLength = networkIn.readInt();
-            byte[] pubKeyBytes = new byte[pubKeyLength];
-            networkIn.readFully(pubKeyBytes);
-            PublicKey receiverPublicKey = RSAEngine.reconstructPublicKey(pubKeyBytes);
+            KeyPair myEcPair = CryptoEngine.generateECKeyPair();
+            byte[] myPubKeyBytes = myEcPair.getPublic().getEncoded();
 
-            SecretKey sessionKey = CryptoEngine.generateAESKey();
-            byte[] encryptedAesKey = RSAEngine.encryptAESKey(sessionKey.getEncoded(), receiverPublicKey);
 
-            networkOut.writeInt(encryptedAesKey.length);
-            networkOut.write(encryptedAesKey);
+            int theirKeyLength = networkIn.readInt();
+            byte[] theirPubKeyBytes = new byte[theirKeyLength];
+            networkIn.readFully(theirPubKeyBytes);
+            PublicKey receiverPublicKey = CryptoEngine.reconstructECPublicKey(theirPubKeyBytes);
+
+
+            networkOut.writeInt(myPubKeyBytes.length);
+            networkOut.write(myPubKeyBytes);
             networkOut.flush();
-            System.out.println("Handshake Successful! AES Session Key securely transmitted.");
 
+            SecretKeySpec sessionKey = CryptoEngine.deriveAESKey(myEcPair.getPrivate(), receiverPublicKey);
+
+
+
+            String safetyNumber = CryptoEngine.generateSafetyNumber(theirPubKeyBytes, myPubKeyBytes);
+            System.out.println("\n==================================================");
+            System.out.println("🔒 SECURE CONNECTION ESTABLISHED");
+            System.out.println("🛡️ Verification Fingerprint: " + safetyNumber);
+            System.out.println("==================================================\n");
 
             networkOut.writeInt(filesToSend.size());
             networkOut.flush();
 
-
             for (int i = 0; i < filesToSend.size(); i++) {
                 File currentFile = filesToSend.get(i);
-                System.out.println("\n--- Sending File " + (i + 1) + " of " + filesToSend.size() + ": " + currentFile.getName() + " ---");
+                System.out.println("--- Sending File " + (i + 1) + " of " + filesToSend.size() + ": " + currentFile.getName() + " ---");
 
                 networkOut.writeUTF(currentFile.getName());
                 networkOut.writeLong(currentFile.length());
@@ -82,7 +92,8 @@ public class FTSender {
 
                         CompletableFuture<Void> job = CompletableFuture.supplyAsync(() -> {
                             try {
-                                return CryptoEngine.encryptChunk(rawData, sessionKey);
+                                // NEW: We pass currentChunkId to create the unique GCM Nonce!
+                                return CryptoEngine.encryptChunk(rawData, sessionKey, currentChunkId);
                             } catch (Exception e) {
                                 throw new RuntimeException("Encryption failed on chunk " + currentChunkId, e);
                             }
@@ -102,6 +113,10 @@ public class FTSender {
 
                         activeJobs.add(job);
                         chunkId++;
+                        if (activeJobs.size() >= 16) {
+                            CompletableFuture.allOf(activeJobs.toArray(new CompletableFuture[0])).join();
+                            activeJobs.clear(); // Empty the list to free up the RAM!
+                        }
                     }
 
                     CompletableFuture.allOf(activeJobs.toArray(new CompletableFuture[0])).join();
@@ -126,7 +141,9 @@ public class FTSender {
         }
     }
 
-
+    /**
+     * THE TERMINAL TESTER
+     */
     public static void main(String[] args) {
         try {
             File f1 = new File("test1.txt");
@@ -138,8 +155,6 @@ public class FTSender {
         }
 
         List<File> dummyFiles = Arrays.asList(new File("test1.txt"), new File("test2.txt"));
-
-
         startTransfer("127.0.0.1", dummyFiles);
     }
 }

@@ -1,75 +1,76 @@
 package org.example;
-import javax.crypto.KeyGenerator;
+
 import javax.crypto.Cipher;
-import javax.crypto.SecretKey;
+import javax.crypto.KeyAgreement;
 import javax.crypto.spec.GCMParameterSpec;
+import javax.crypto.spec.SecretKeySpec;
 import java.nio.ByteBuffer;
-import java.security.InvalidKeyException;
-import java.security.NoSuchAlgorithmException;
-import java.security.SecureRandom;
+import java.security.*;
+import java.security.spec.X509EncodedKeySpec;
 
 public class CryptoEngine {
-    private static final String ALGORITHM="AES";
-    private static final String CIPHER_TRANSFORMATION="AES/GCM/NoPadding";
-    private static final int GCM_TAG_LENGTH = 128;
-    private static final int IV_LENGTH = 12;
 
-    public static SecretKey generateAESKey() throws Exception{
-        KeyGenerator keyGenerator= KeyGenerator.getInstance(ALGORITHM);
-        keyGenerator.init(256);
-        return keyGenerator.generateKey();
+    private static final int GCM_TAG_LENGTH = 128; // 128-bit authentication tag
+    private static final int GCM_IV_LENGTH = 12;   // 12-byte standard nonce
+
+    // 1. GENERATE ELLIPTIC CURVE KEYS (Fixes Perfect Forward Secrecy)
+    public static KeyPair generateECKeyPair() throws Exception {
+        KeyPairGenerator keyPairGenerator = KeyPairGenerator.getInstance("EC");
+        keyPairGenerator.initialize(256); // secp256r1 standard
+        return keyPairGenerator.generateKeyPair();
     }
 
-    public static byte[] encryptChunk(byte[] plaintext, SecretKey key)throws Exception{
-        byte[] iv=new byte[IV_LENGTH];
-        SecureRandom random=new SecureRandom();
-        random.nextBytes(iv);
+    public static PublicKey reconstructECPublicKey(byte[] keyBytes) throws Exception {
+        KeyFactory keyFactory = KeyFactory.getInstance("EC");
+        return keyFactory.generatePublic(new X509EncodedKeySpec(keyBytes));
+    }
 
-        Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
-        GCMParameterSpec parameterSpec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
-        cipher.init(Cipher.ENCRYPT_MODE, key, parameterSpec);
-        byte[] encryptedData= cipher.doFinal(plaintext);
+    // 2. DERIVE THE SHARED AES KEY (The ECDHE Magic)
+    public static SecretKeySpec deriveAESKey(PrivateKey myPrivateKey, PublicKey theirPublicKey) throws Exception {
+        KeyAgreement keyAgreement = KeyAgreement.getInstance("ECDH");
+        keyAgreement.init(myPrivateKey);
+        keyAgreement.doPhase(theirPublicKey, true);
+        byte[] sharedSecret = keyAgreement.generateSecret();
 
-        ByteBuffer buffer= ByteBuffer.allocate(iv.length+encryptedData.length);
-        buffer.put(iv);
-        buffer.put(encryptedData);
+        // Hash the raw EC secret into a clean 256-bit AES key
+        MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+        byte[] aesKeyBytes = sha256.digest(sharedSecret);
+        return new SecretKeySpec(aesKeyBytes, "AES");
+    }
+
+    // 3. GENERATE A VISUAL FINGERPRINT (Fixes MITM Attacks)
+    public static String generateSafetyNumber(byte[] myPubKey, byte[] theirPubKey) throws Exception {
+        MessageDigest sha256 = MessageDigest.getInstance("SHA-256");
+        sha256.update(myPubKey);
+        sha256.update(theirPubKey);
+        byte[] hash = sha256.digest();
+        // Return the first 6 numbers of the hash as a visual string
+        return String.format("%06d", Math.abs(ByteBuffer.wrap(hash).getInt()) % 1000000);
+    }
+
+    // 4. AES-GCM ENCRYPTION (Fixes Packet Tampering)
+    public static byte[] encryptChunk(byte[] plaintext, SecretKeySpec aesKey, int chunkId) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        byte[] iv = generateDeterministicIV(chunkId);
+        GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
+
+        cipher.init(Cipher.ENCRYPT_MODE, aesKey, spec);
+        return cipher.doFinal(plaintext);
+    }
+
+    public static byte[] decryptChunk(byte[] ciphertext, SecretKeySpec aesKey, int chunkId) throws Exception {
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        byte[] iv = generateDeterministicIV(chunkId);
+        GCMParameterSpec spec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
+
+        cipher.init(Cipher.DECRYPT_MODE, aesKey, spec);
+        return cipher.doFinal(ciphertext); // Will throw AEADBadTagException if tampered!
+    }
+
+    // GCM requires a unique IV for every chunk. We use the chunkId to ensure it never repeats.
+    private static byte[] generateDeterministicIV(int chunkId) {
+        ByteBuffer buffer = ByteBuffer.allocate(GCM_IV_LENGTH);
+        buffer.putInt(chunkId);
         return buffer.array();
-
-    }
-
-    public static byte[] decryptChunk(byte[] encryptedDataWithIv, SecretKey key) throws Exception {
-
-        ByteBuffer byteBuffer = ByteBuffer.wrap(encryptedDataWithIv);
-        byte[] iv = new byte[IV_LENGTH];
-        byteBuffer.get(iv);
-
-        byte[] encryptedData = new byte[byteBuffer.remaining()];
-        byteBuffer.get(encryptedData);
-
-        Cipher cipher = Cipher.getInstance(CIPHER_TRANSFORMATION);
-        GCMParameterSpec parameterSpec = new GCMParameterSpec(GCM_TAG_LENGTH, iv);
-        cipher.init(Cipher.DECRYPT_MODE, key, parameterSpec);
-
-        return cipher.doFinal(encryptedData);
-    }
-    public static void main(String[] args) {
-        try {
-            SecretKey myKey = generateAESKey();
-
-            String secretMessage = "AegisNode Phase 3: Enterprise Encryption Activated!";
-            byte[] rawBytes = secretMessage.getBytes();
-            System.out.println("Original: " + new String(rawBytes));
-
-
-            byte[] encryptedPackage = encryptChunk(rawBytes, myKey);
-            System.out.println("Encrypted Package Size: " + encryptedPackage.length + " bytes");
-
-
-            byte[] decryptedBytes = decryptChunk(encryptedPackage, myKey);
-            System.out.println("Decrypted: " + new String(decryptedBytes));
-
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
     }
 }
